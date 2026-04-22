@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Neon Invaders</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #05010f;
+    font-family: 'Courier New', monospace;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; color: #fff;
+  }
+  .game-wrap {
+    position: relative;
+    background: radial-gradient(ellipse at center, #1a0933 0%, #05010f 70%);
+    border: 2px solid #ff00ff;
+    border-radius: 8px;
+    box-shadow: 0 0 40px #ff00ff, inset 0 0 40px rgba(255,0,255,0.2);
+    padding: 12px;
+  }
+  canvas { display: block; background: #05010f; border-radius: 4px; }
+  .hud {
+    display: flex; justify-content: space-between;
+    font-size: 14px; letter-spacing: 2px;
+    padding: 6px 4px 10px; text-shadow: 0 0 8px currentColor;
+  }
+  .hud .score { color: #00ffff; }
+  .hud .level { color: #ffff00; }
+  .hud .lives { color: #ff3366; }
+  .overlay {
+    position: absolute; inset: 12px;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: rgba(5,1,15,0.85);
+    border-radius: 4px;
+    text-align: center;
+  }
+  .overlay h1 {
+    font-size: 42px; margin: 0 0 10px; letter-spacing: 6px;
+    color: #ff00ff; text-shadow: 0 0 20px #ff00ff, 0 0 40px #ff00ff;
+  }
+  .overlay p { color: #00ffff; font-size: 14px; letter-spacing: 2px; margin: 4px 0; text-shadow: 0 0 8px #00ffff; }
+  .overlay button {
+    margin-top: 18px; background: transparent;
+    border: 2px solid #00ff88; color: #00ff88;
+    padding: 10px 24px; font-family: inherit; font-size: 14px;
+    letter-spacing: 3px; cursor: pointer; border-radius: 4px;
+    box-shadow: 0 0 16px #00ff88; text-shadow: 0 0 8px #00ff88;
+  }
+  .overlay button:hover { background: rgba(0,255,136,0.15); }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="game-wrap">
+  <div class="hud">
+    <div class="score">SCORE <span id="score">0</span></div>
+    <div class="level">LEVEL <span id="level">1</span></div>
+    <div class="lives">LIVES <span id="lives">♥♥♥</span></div>
+  </div>
+  <canvas id="game" width="640" height="520"></canvas>
+  <div class="overlay" id="overlay">
+    <h1>NEON INVADERS</h1>
+    <p>← → MOVE &nbsp;•&nbsp; SPACE FIRE</p>
+    <p>Destroy the swarm. Watch for bonus UFOs!</p>
+    <button id="startBtn">START</button>
+  </div>
+</div>
+
+<script>
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  const scoreEl = document.getElementById('score');
+  const levelEl = document.getElementById('level');
+  const livesEl = document.getElementById('lives');
+  const overlay = document.getElementById('overlay');
+  const startBtn = document.getElementById('startBtn');
+
+  let player, bullets, enemies, enemyBullets, particles, ufo;
+  let score, lives, level, enemyDir, enemyStep, enemyTimer, ufoTimer;
+  let keys = {}, running = false, lastTime = 0, shootCooldown = 0;
+
+  // -------- Entities --------
+  function initPlayer() {
+    player = { x: W/2 - 20, y: H - 40, w: 40, h: 16, speed: 300, color: '#00ff88' };
+  }
+
+  function spawnEnemies() {
+    enemies = [];
+    const cols = 10, rows = 5;
+    const startX = 60, startY = 60;
+    const gapX = 48, gapY = 40;
+    const colors = ['#ff00ff', '#ff66cc', '#ffff00', '#00ffff', '#00ff88'];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        enemies.push({
+          x: startX + c*gapX, y: startY + r*gapY,
+          w: 30, h: 22, color: colors[r % colors.length],
+          row: r, alive: true
+        });
+      }
+    }
+    enemyDir = 1;
+    enemyStep = Math.max(0.2, 0.8 - (level - 1) * 0.08);
+    enemyTimer = 0;
+  }
+
+  function reset() {
+    score = 0; lives = 3; level = 1;
+    bullets = []; enemyBullets = []; particles = []; ufo = null;
+    ufoTimer = 8 + Math.random() * 8;
+    initPlayer();
+    spawnEnemies();
+    updateHUD();
+  }
+
+  function updateHUD() {
+    scoreEl.textContent = score;
+    levelEl.textContent = level;
+    livesEl.textContent = '♥'.repeat(Math.max(0, lives));
+  }
+
+  // -------- Particles --------
+  function burst(x, y, color, n = 18) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = 50 + Math.random() * 200;
+      particles.push({
+        x, y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s,
+        life: 0.6 + Math.random() * 0.4,
+        age: 0,
+        color,
+        size: 2 + Math.random() * 2
+      });
+    }
+  }
+
+  // -------- Input --------
+  document.addEventListener('keydown', e => {
+    if (['ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+    keys[e.key] = true;
+  });
+  document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+  startBtn.addEventListener('click', () => {
+    reset();
+    overlay.classList.add('hidden');
+    running = true;
+    lastTime = performance.now();
+    requestAnimationFrame(loop);
+  });
+
+  function showOverlay(title, sub) {
+    overlay.querySelector('h1').textContent = title;
+    const ps = overlay.querySelectorAll('p');
+    ps[0].textContent = sub;
+    ps[1].textContent = `Final Score: ${score}`;
+    startBtn.textContent = 'PLAY AGAIN';
+    overlay.classList.remove('hidden');
+  }
+
+  // -------- Update --------
+  function update(dt) {
+    shootCooldown -= dt;
+
+    // Player movement
+    if (keys['ArrowLeft'])  player.x -= player.speed * dt;
+    if (keys['ArrowRight']) player.x += player.speed * dt;
+    player.x = Math.max(0, Math.min(W - player.w, player.x));
+
+    if (keys[' '] && shootCooldown <= 0) {
+      bullets.push({ x: player.x + player.w/2 - 2, y: player.y - 8, w: 4, h: 12, vy: -500 });
+      shootCooldown = 0.35;
+    }
+
+    // Player bullets
+    bullets.forEach(b => b.y += b.vy * dt);
+    bullets = bullets.filter(b => b.y + b.h > 0);
+
+    // Enemies march
+    enemyTimer += dt;
+    if (enemyTimer >= enemyStep) {
+      enemyTimer = 0;
+      let drop = false;
+      const living = enemies.filter(e => e.alive);
+      const minX = Math.min(...living.map(e => e.x));
+      const maxX = Math.max(...living.map(e => e.x + e.w));
+      if ((enemyDir === 1 && maxX + 16 >= W) || (enemyDir === -1 && minX - 16 <= 0)) {
+        enemyDir *= -1; drop = true;
+      }
+      enemies.forEach(e => {
+        if (!e.alive) return;
+        if (drop) e.y += 18;
+        else e.x += 16 * enemyDir;
+      });
+      // Speed up as fewer remain
+      const ratio = living.length / 50;
+      enemyStep = Math.max(0.08, (0.8 - (level-1)*0.08) * (0.3 + ratio*0.7));
+    }
+
+    // Enemy shooting
+    if (Math.random() < (0.012 + level * 0.004)) {
+      const shooters = enemies.filter(e => e.alive);
+      if (shooters.length) {
+        const s = shooters[Math.floor(Math.random() * shooters.length)];
+        enemyBullets.push({ x: s.x + s.w/2 - 2, y: s.y + s.h, w: 4, h: 10, vy: 220 + level*20, color: '#ff3366' });
+      }
+    }
+    enemyBullets.forEach(b => b.y += b.vy * dt);
+    enemyBullets = enemyBullets.filter(b => b.y < H);
+
+    // UFO
+    ufoTimer -= dt;
+    if (!ufo && ufoTimer <= 0) {
+      const fromLeft = Math.random() < 0.5;
+      ufo = {
+        x: fromLeft ? -40 : W + 40,
+        y: 26, w: 36, h: 14,
+        vx: fromLeft ? 140 : -140,
+        color: '#ffff00'
+      };
+      ufoTimer = 12 + Math.random() * 10;
+    }
+    if (ufo) {
+      ufo.x += ufo.vx * dt;
+      if (ufo.x < -60 || ufo.x > W + 60) ufo = null;
+    }
+
+    // Collisions: player bullets -> enemies
+    bullets.forEach(b => {
+      enemies.forEach(e => {
+        if (e.alive && rectsHit(b, e)) {
+          e.alive = false; b.y = -999;
+          score += 10 * (5 - e.row);
+          burst(e.x + e.w/2, e.y + e.h/2, e.color);
+        }
+      });
+      if (ufo && rectsHit(b, ufo)) {
+        const pts = 100 + Math.floor(Math.random() * 4) * 50;
+        score += pts;
+        burst(ufo.x + ufo.w/2, ufo.y + ufo.h/2, ufo.color, 30);
+        ufo = null; b.y = -999;
+      }
+    });
+
+    // Enemy bullets -> player
+    enemyBullets.forEach(b => {
+      if (rectsHit(b, player)) {
+        b.y = H + 999;
+        loseLife();
+      }
+    });
+
+    // Enemies reach ground
+    if (enemies.some(e => e.alive && e.y + e.h >= player.y)) {
+      lives = 0; loseLife();
+    }
+
+    // Level cleared
+    if (enemies.every(e => !e.alive)) {
+      level++;
+      bullets = []; enemyBullets = []; ufo = null;
+      spawnEnemies();
+    }
+
+    updateHUD();
+
+    // Particles
+    particles.forEach(p => {
+      p.age += dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.96; p.vy *= 0.96;
+    });
+    particles = particles.filter(p => p.age < p.life);
+  }
+
+  function loseLife() {
+    lives--;
+    burst(player.x + player.w/2, player.y + player.h/2, player.color, 30);
+    if (lives <= 0) {
+      running = false;
+      showOverlay('GAME OVER', 'The swarm wins this time.');
+    } else {
+      initPlayer();
+      enemyBullets = [];
+    }
+  }
+
+  function rectsHit(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x &&
+           a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  // -------- Render --------
+  function glowRect(x, y, w, h, color) {
+    ctx.save();
+    ctx.shadowBlur = 14;
+    ctx.shadowColor = color;
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, w, h);
+    ctx.restore();
+  }
+
+  function drawPlayer() {
+    glowRect(player.x + 16, player.y - 4, 8, 6, player.color); // turret
+    glowRect(player.x, player.y, player.w, player.h, player.color);
+  }
+
+  function drawEnemy(e) {
+    // little alien shape
+    const s = 3; // pixel size
+    const px = e.x, py = e.y;
+    ctx.save();
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = e.color;
+    ctx.fillStyle = e.color;
+    // simple invader-like 10x7 grid
+    const pattern = [
+      "0011111100",
+      "0111111110",
+      "1110110111",
+      "1111111111",
+      "0011001100",
+      "0110110110",
+      "1100000011",
+    ];
+    for (let r = 0; r < pattern.length; r++) {
+      for (let c = 0; c < pattern[r].length; c++) {
+        if (pattern[r][c] === '1') ctx.fillRect(px + c*s, py + r*s, s, s);
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawUfo(u) {
+    ctx.save();
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = u.color;
+    ctx.fillStyle = u.color;
+    ctx.fillRect(u.x + 6, u.y, u.w - 12, 4);
+    ctx.fillRect(u.x, u.y + 4, u.w, 6);
+    ctx.fillRect(u.x + 4, u.y + 10, u.w - 8, 4);
+    ctx.restore();
+  }
+
+  function drawStars(t) {
+    // subtle parallax starfield
+    ctx.fillStyle = '#05010f';
+    ctx.fillRect(0, 0, W, H);
+    for (let i = 0; i < 60; i++) {
+      const x = (i * 97 + t * 10) % W;
+      const y = (i * 53) % H;
+      const a = 0.3 + 0.7 * Math.abs(Math.sin((t + i) * 2));
+      ctx.fillStyle = `rgba(180,200,255,${a})`;
+      ctx.fillRect(x, y, 1.5, 1.5);
+    }
+  }
+
+  function render(t) {
+    drawStars(t / 1000);
+    enemies.forEach(e => { if (e.alive) drawEnemy(e); });
+    if (ufo) drawUfo(ufo);
+    drawPlayer();
+    bullets.forEach(b => glowRect(b.x, b.y, b.w, b.h, '#00ffff'));
+    enemyBullets.forEach(b => glowRect(b.x, b.y, b.w, b.h, b.color));
+    particles.forEach(p => {
+      const alpha = 1 - p.age / p.life;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = p.color;
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x, p.y, p.size, p.size);
+      ctx.restore();
+    });
+  }
+
+  function loop(now) {
+    const dt = Math.min(0.05, (now - lastTime) / 1000);
+    lastTime = now;
+    if (running) update(dt);
+    render(now);
+    if (running) requestAnimationFrame(loop);
+  }
+</script>
+
+</body>
+</html>
